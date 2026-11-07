@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A Moment to Treasure</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    :root {
+      color-scheme: dark;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      padding: 24px 16px;
+      background:
+        radial-gradient(circle at 20% 10%, #251127 0, transparent 35%),
+        radial-gradient(circle at 80% 30%, #17112c 0, transparent 38%),
+        #080611;
+      color: #f5e3ed;
+      font-family: system-ui, sans-serif;
+      overflow-x: hidden;
+    }
+
+    main {
+      width: min(100%, 560px);
+      text-align: center;
+    }
+
+    .frame {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 4 / 5;
+      margin: 0 auto;
+      overflow: hidden;
+      border: 1px solid #e8bdd345;
+      border-radius: 18px;
+      background: #080611;
+      box-shadow:
+        0 25px 80px #0009,
+        0 0 45px #b4619b20;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .placeholder {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      pointer-events: none;
+    }
+
+    .placeholder-inner {
+      max-width: 280px;
+      color: #e9cbdc;
+      line-height: 1.7;
+      text-shadow: 0 0 20px #d18fb7;
+      font-size: 14px;
+    }
+
+    .placeholder-inner span {
+      display: block;
+      margin-bottom: 12px;
+      font-size: 38px;
+    }
+
+    .placeholder[hidden] {
+      display: none;
+    }
+
+    .replay-trigger {
+      margin-top: 16px;
+      background: transparent;
+      border: none;
+      color: #c9b4c866;
+      font-size: 13px;
+      cursor: pointer;
+      transition: color 0.3s;
+    }
+
+    .replay-trigger:hover {
+      color: #f8ddec;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .replay-trigger {
+        transition: none;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <main>
+    <div class="frame">
+      <canvas
+        id="canvas"
+        role="img"
+        aria-label="Sparkling particles form your memory photo beneath your message"
+      ></canvas>
+
+      <div id="placeholder" class="placeholder">
+        <div class="placeholder-inner">
+          <span>✧</span>
+          Preparing your moment...
+        </div>
+      </div>
+    </div>
+
+    <button id="replayBtn" class="replay-trigger" type="button" style="display: none;">
+      ↺ Replay Moment
+    </button>
+  </main>
+
+  <script>
+    (() => {
+      "use strict";
+
+      // ==========================================
+      // EDIT YOUR CUSTOM MESSAGE AND IMAGE HERE
+      // ==========================================
+      const customMessage = "Zor Zorm Xosh Dawey Shazada Xatunm";
+      const imageUrl = "photo.jpg"; // Name of your image file in the repository
+
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d");
+      const placeholder = document.getElementById("placeholder");
+      const replayBtn = document.getElementById("replayBtn");
+
+      const W = 720;
+      const H = 900;
+      const TAU = Math.PI * 2;
+      const PARTICLE_SPACING = 8;
+      const DURATION = 9;
+
+      const motionPreference = matchMedia("(prefers-reduced-motion: reduce)");
+
+      const photoCanvas = document.createElement("canvas");
+      photoCanvas.width = W;
+      photoCanvas.height = H;
+
+      const photoCtx = photoCanvas.getContext("2d", { willReadFrequently: true });
+
+      const random = (min, max) => min + Math.random() * (max - min);
+      const clamp = value => Math.max(0, Math.min(1, value));
+
+      function smooth(value) {
+        const n = clamp(value);
+        return n * n * (3 - 2 * n);
+      }
+
+      const stars = Array.from({ length: 135 }, () => ({
+        x: random(20, W - 20),
+        y: random(20, H - 20),
+        radius: random(0.4, 1.5),
+        alpha: random(0.08, 0.5),
+        phase: random(0, TAU)
+      }));
+
+      let particles = [];
+      let photoBounds = null;
+      let hasPhoto = false;
+      let frameId = null;
+      let animationStart = 0;
+      let elapsed = 0;
+      let scaleX = 1;
+      let scaleY = 1;
+
+      function resize() {
+        const rect = canvas.getBoundingClientRect();
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+        canvas.width = Math.round(rect.width * dpr);
+        canvas.height = Math.round(rect.height * dpr);
+
+        scaleX = canvas.width / W;
+        scaleY = canvas.height / H;
+
+        render(elapsed);
+      }
+
+      function roundedRect(context, x, y, width, height, radius) {
+        const r = Math.min(radius, width / 2, height / 2);
+        context.beginPath();
+        context.moveTo(x + r, y);
+        context.lineTo(x + width - r, y);
+        context.quadraticCurveTo(x + width, y, x + width, y + r);
+        context.lineTo(x + width, y + height - r);
+        context.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+        context.lineTo(x + r, y + height);
+        context.quadraticCurveTo(x, y + height, x, y + height - r);
+        context.lineTo(x, y + r);
+        context.quadraticCurveTo(x, y, x + r, y);
+        context.closePath();
+      }
+
+      function glow(x, y, radius, color) {
+        const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+        gradient.addColorStop(0, color);
+        gradient.addColorStop(1, "rgba(0, 0, 0, 0)");
+
+        ctx.fillStyle = gradient;
+        ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+      }
+
+      function drawBackground(time) {
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = "source-over";
+
+        const background = ctx.createLinearGradient(0, 0, W, H);
+        background.addColorStop(0, "#120a1b");
+        background.addColorStop(0.5, "#090715");
+        background.addColorStop(1, "#110a17");
+
+        ctx.fillStyle = background;
+        ctx.fillRect(0, 0, W, H);
+
+        glow(140, 160, 280, "rgba(116, 54, 100, 0.24)");
+        glow(610, 380, 300, "rgba(90, 65, 150, 0.18)");
+        glow(350, 800, 260, "rgba(143, 69, 105, 0.13)");
+
+        ctx.fillStyle = "#ffe6f3";
+
+        for (const star of stars) {
+          const twinkle = motionPreference.matches
+            ? 1
+            : 0.75 + 0.25 * Math.sin(time * 1.2 + star.phase);
+
+          ctx.globalAlpha = star.alpha * twinkle;
+          ctx.beginPath();
+          ctx.arc(star.x, star.y, star.radius, 0, TAU);
+          ctx.fill();
+        }
+
+        ctx.globalAlpha = 1;
+
+        roundedRect(ctx, 22, 22, W - 44, H - 44, 18);
+        ctx.strokeStyle = "rgba(236, 190, 219, 0.22)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
+      function drawHeading(time) {
+        const reveal = hasPhoto ? smooth((time - 1) / 2) : 1;
+
+        ctx.save();
+        ctx.globalAlpha = reveal;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = "#f8ddec";
+        ctx.shadowColor = "#e8a5ca";
+        ctx.shadowBlur = 15;
+
+        let fontSize = 38;
+        ctx.font = `italic ${fontSize}px Georgia, serif`;
+
+        while (ctx.measureText(customMessage).width > W - 110 && fontSize > 18) {
+          fontSize--;
+          ctx.font = `italic ${fontSize}px Georgia, serif`;
+        }
+
+        ctx.fillText(customMessage, W / 2, 96);
+
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = "#d7afc8";
+        ctx.font = "12px system-ui, sans-serif";
+        ctx.fillText("✦  A MOMENT TO TREASURE  ✦", W / 2, 137);
+
+        ctx.restore();
+      }
+
+      function drawFooter(time) {
+        const reveal = hasPhoto ? smooth((time - 6) / 2) : 0;
+
+        ctx.save();
+        ctx.globalAlpha = reveal;
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#d9b7cb";
+        ctx.font = "italic 19px Georgia, serif";
+        ctx.fillText("A memory worth keeping forever", W / 2, 825);
+
+        ctx.fillStyle = "#eac7dc";
+        ctx.font = "17px Georgia, serif";
+        ctx.fillText("✧  ♡  ✧", W / 2, 854);
+        ctx.restore();
+      }
+
+      function preparePhoto(image) {
+        photoCtx.clearRect(0, 0, W, H);
+
+        const area = { x: 65, y: 180, width: 590, height: 590 };
+        const scale = Math.min(
+          area.width / image.naturalWidth,
+          area.height / image.naturalHeight
+        );
+
+        const width = image.naturalWidth * scale;
+        const height = image.naturalHeight * scale;
+        const x = area.x + (area.width - width) / 2;
+        const y = area.y + (area.height - height) / 2;
+
+        photoBounds = { x, y, width, height };
+
+        photoCtx.save();
+        roundedRect(photoCtx, x, y, width, height, 12);
+        photoCtx.clip();
+        photoCtx.drawImage(image, x, y, width, height);
+        photoCtx.restore();
+
+        const pixels = photoCtx.getImageData(0, 0, W, H).data;
+        const result = [];
+
+        const startX = Math.max(0, Math.floor(x));
+        const startY = Math.max(0, Math.floor(y));
+        const endX = Math.min(W, Math.ceil(x + width));
+        const endY = Math.min(H, Math.ceil(y + height));
+
+        for (let py = startY; py < endY; py += PARTICLE_SPACING) {
+          for (let px = startX; px < endX; px += PARTICLE_SPACING) {
+            const index = (py * W + px) * 4;
+            const alpha = pixels[index + 3] / 255;
+
+            if (alpha < 0.05) continue;
+
+            result.push({
+              x: px,
+              y: py,
+              startX: random(-70, W + 70),
+              startY: random(160, H + 70),
+              delay: random(0, 1.6),
+              phase: random(0, TAU),
+              drift: random(15, 55),
+              size: random(1.4, 3.2),
+              alpha,
+              color: `rgb(${pixels[index]}, ${pixels[index + 1]}, ${pixels[index + 2]})`,
+              sparkle: Math.random() < 0.035
+            });
+          }
+        }
+
+        particles = result;
+      }
+
+      function resetParticles() {
+        for (const particle of particles) {
+          particle.startX = random(-70, W + 70);
+          particle.startY = random(160, H + 70);
+          particle.delay = random(0, 1.6);
+          particle.phase = random(0, TAU);
+        }
+      }
+
+      function drawPhotoFrame(reveal) {
+        if (!photoBounds || reveal <= 0) return;
+        const { x, y, width, height } = photoBounds;
+
+        ctx.save();
+        ctx.globalAlpha = reveal;
+
+        roundedRect(ctx, x - 4, y - 4, width + 8, height + 8, 15);
+        ctx.strokeStyle = "rgba(245, 201, 225, 0.7)";
+        ctx.lineWidth = 1.2;
+        ctx.shadowColor = "#e4a2c9";
+        ctx.shadowBlur = 18;
+        ctx.stroke();
+
+        ctx.restore();
+      }
+
+      function drawParticles(time, fade) {
+        if (fade <= 0) return;
+
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+
+        for (const particle of particles) {
+          const progress = smooth((time - particle.delay) / 5.4);
+          const remaining = 1 - progress;
+
+          const x =
+            particle.startX +
+            (particle.x - particle.startX) * progress +
+            Math.sin(time * 0.75 + particle.phase) * particle.drift * remaining;
+
+          const y =
+            particle.startY +
+            (particle.y - particle.startY) * progress +
+            Math.cos(time * 0.65 + particle.phase) * particle.drift * remaining;
+
+          const shimmer = 0.72 + 0.28 * Math.sin(time * 2.5 + particle.phase);
+
+          ctx.globalAlpha =
+            particle.alpha * fade * shimmer * smooth(time / 0.8);
+
+          ctx.fillStyle = particle.color;
+          ctx.beginPath();
+          ctx.arc(x, y, particle.size, 0, TAU);
+          ctx.fill();
+
+          if (particle.sparkle) {
+            ctx.globalAlpha *= 0.65;
+            ctx.fillStyle = "#fff1fa";
+            ctx.fillRect(x - 4, y - 0.5, 8, 1);
+            ctx.fillRect(x - 0.5, y - 4, 1, 8);
+          }
+        }
+
+        ctx.restore();
+      }
+
+      function render(time) {
+        ctx.setTransform(scaleX, 0, 0, scaleY, 0, 0);
+
+        drawBackground(time);
+        drawHeading(time);
+
+        if (hasPhoto) {
+          const photoReveal = smooth((time - 5.5) / 2.5);
+          const particleFade = 1 - smooth((time - 6.2) / 2);
+
+          ctx.save();
+          ctx.globalAlpha = photoReveal;
+          ctx.drawImage(photoCanvas, 0, 0);
+          ctx.restore();
+
+          drawParticles(time, particleFade);
+          drawPhotoFrame(photoReveal);
+          drawFooter(time);
+        }
+      }
+
+      function animate(now) {
+        elapsed = (now - animationStart) / 1000;
+        render(elapsed);
+
+        if (elapsed < DURATION) {
+          frameId = requestAnimationFrame(animate);
+        } else {
+          frameId = null;
+          replayBtn.style.display = "inline-block";
+        }
+      }
+
+      function playAnimation() {
+        if (!hasPhoto) return;
+
+        if (frameId !== null) {
+          cancelAnimationFrame(frameId);
+          frameId = null;
+        }
+
+        resetParticles();
+
+        if (motionPreference.matches) {
+          elapsed = DURATION;
+          render(elapsed);
+          replayBtn.style.display = "inline-block";
+          return;
+        }
+
+        elapsed = 0;
+        animationStart = performance.now();
+        frameId = requestAnimationFrame(animate);
+      }
+
+      function init() {
+        window.addEventListener("resize", resize);
+        resize();
+
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => {
+          preparePhoto(img);
+          hasPhoto = true;
+          placeholder.hidden = true;
+          playAnimation();
+        };
+        img.onerror = () => {
+          placeholder.querySelector(".placeholder-inner").innerHTML =
+            "<span>!</span>Could not load photo.jpg. Make sure the image is in the same folder!";
+        };
+        img.src = imageUrl;
+      }
+
+      replayBtn.addEventListener("click", playAnimation);
+      init();
+    })();
+  </script>
+</body>
+</html>
